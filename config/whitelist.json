@@ -121,6 +121,196 @@
       "repoPattern": ".*",
       "filePattern": "(?i)(^|[\\\\/])README\\.md$",
       "linePattern": "(?i)secret_id\\s*=\\s*\"00000000-0000-0000-0000-000000000000\""
+    },
+    {
+      "reason": "Variable assigned from HVAC client API call, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])client\\.py$",
+      "linePattern": "(?i)secret\\s*=\\s*self\\.hvac_client\\.secrets\\.kv\\.v2\\.read_secret_version\\s*\\("
+    },
+    {
+      "reason": "Conditional check on API response dict, not a hardcoded secret",
+      "detectors": [
+        "semgrep"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])client\\.py$",
+      "linePattern": "(?i)if\\s+secret\\s+is\\s+not\\s+None.*'data'.*secret\\['data'\\]\\s+is\\s+not\\s+None"
+    },
+    {
+      "reason": "Variable assigned from dict access on API response, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])client\\.py$",
+      "linePattern": "(?i)secret_data\\s*=\\s*secret\\['data'\\]\\['data'\\]"
+    },
+    {
+      "reason": "CI_JOB_TOKEN read from environment variable, not hardcoded",
+      "detectors": [
+        "semgrep"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)CI_JOB_TOKEN\\s*=\\s*os\\.getenv\\s*\\(\\s*['\"]CI_JOB_TOKEN['\"]\\s*\\)"
+    },
+    {
+      "reason": "JOB-TOKEN header uses CI variable reference, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)JOB-TOKEN['\"]?\\s*[=:]\\s*['\"]?\\$?CI_JOB_TOKEN['\"]?"
+    },
+    {
+      "reason": "package-lock.json is auto-generated; integrity hashes and npm package names are not secrets",
+      "detectors": [
+        "semgrep"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])package-lock\\.json$"
+    },
+    {
+      "reason": "PASSWORD: '$PASSWORD' is a shell variable reference in CI, not a hardcoded secret",
+      "detectors": [
+        "semgrep"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)PASSWORD\\s*:\\s*'\\$PASSWORD'"
+    },
+    {
+      "reason": "PASSWORD read from environment variable with error sentinel default, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)PASSWORD\\s*=\\s*getenv\\s*\\(\\s*['\"]PASSWORD['\"]\\s*,\\s*['\"]ENVIRONMENT_ERROR['\"]\\s*\\)"
+    },
+    {
+      "reason": "password unpacked from Base64-decoded credentials, not a hardcoded secret",
+      "detectors": [
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)username\\s*,\\s*password\\s*=\\s*\\[.*b64decode.*\\]"
+    },
+    {
+      "reason": "DB_PWD placeholder value using angle-bracket template syntax, not a real password",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)DB_PWD\\s*=\\s*\"<DB_SELECTED_PASSWORD>\""
+    },
+    {
+      "reason": "db_pwd read from environment variable, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)db_pwd\\s*=\\s*os\\.getenv\\s*\\(\\s*['\"]DB_PWD['\"]\\s*\\)"
+    },
+    {
+      "reason": "Password assigned from kwargs dict (runtime argument), not a hardcoded secret",
+      "detectors": [
+        "semgrep"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)\\w*[Pp][Aa][Ss][Ss][Ww][Dd]\\w*\\s*=\\s*kwargs\\[['\"]password['\"]\\]"
+    },
+    {
+      "reason": "password read from environment variable, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)password\\s*=\\s*os\\.getenv\\s*\\(\\s*['\"]LDAP_SERVER_PASSWORD['\"]\\s*\\)"
+    },
+    {
+      "reason": "Ansible Jinja2 templated secret reference, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.yml$",
+      "linePattern": "(?i)secret\\s*:\\s*\"\\{\\{\\s*tacacs_pwd\\s*\\}\\}\""
+    },
+    {
+      "reason": "Ansible password lookup from environment variable, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.yml$",
+      "linePattern": "(?i)password\\s*:\\s*\"\\{\\{\\s*lookup\\s*\\(\\s*'ansible\\.builtin\\.env'\\s*,\\s*'ansible_temp_password'\\s*\\)\\s*\\}\\}\""
+    },
+    {
+      "reason": "Ansible Jinja2 variable reference to vmware credentials, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.yml$",
+      "linePattern": "(?i)password\\s*:\\s*\"\\{\\{\\s*vmware\\.credentials\\.password\\s*\\}\\}\""
+    },
+    {
+      "reason": "Ansible Jinja2 variable reference for SNMP auth password, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.yml$",
+      "linePattern": "(?i)snmp_auth_password\\s*:\\s*\"\\{\\{\\s*f5\\.system\\.snmp_v3\\.auth_password\\s*\\}\\}\""
+    },
+    {
+      "reason": "Ansible Jinja2 variable reference for update_password, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.yml$",
+      "linePattern": "(?i)update_password\\s*:\\s*\"\\{\\{\\s*item\\.update_password\\s*\\}\\}\""
     }
   ]
 }

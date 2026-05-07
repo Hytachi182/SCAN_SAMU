@@ -81,6 +81,21 @@ def is_windows() -> bool:
     return platform.system().lower().startswith("win")
 
 
+def force_rmtree(path: Path) -> None:
+    """shutil.rmtree with a handler to remove read-only files on Windows."""
+    if not path.exists():
+        return
+
+    def _on_error(_func: Any, _path: str, _exc_info: Any) -> None:
+        try:
+            os.chmod(_path, 0o777)
+            os.remove(_path)
+        except FileNotFoundError:
+            pass
+
+    shutil.rmtree(path, onerror=_on_error)
+
+
 def docker_mount_path(path: Path) -> str:
     # Docker Desktop accepts absolute Windows paths and POSIX paths on Linux/macOS.
     return str(path.resolve())
@@ -243,7 +258,7 @@ def sync_project(ctx: Context, project: dict[str, Any]) -> dict[str, Any]:
 
     target = ctx.repos / safe_relative_repo_path(namespace)
     if target.exists():
-        shutil.rmtree(target)
+        force_rmtree(target)
     target.parent.mkdir(parents=True, exist_ok=True)
 
     log("INFO", f"Clone {namespace} ({branch})")
@@ -306,7 +321,7 @@ def sync_project_deep(ctx: Context, project: dict[str, Any]) -> dict[str, Any]:
 
     target = ctx.repos / safe_relative_repo_path(namespace)
     if target.exists():
-        shutil.rmtree(target)
+        force_rmtree(target)
     target.parent.mkdir(parents=True, exist_ok=True)
 
     log("INFO", f"Clone profond {namespace} (historique entier, toutes branches)")
@@ -558,10 +573,11 @@ def run_detect_secrets(ctx: Context, repo_dir: Path, output: Path) -> None:
         raise RuntimeError("detect-secrets a echoue")
 
 
-def run_semgrep(ctx: Context, repo_dir: Path, output: Path) -> None:
+def run_semgrep(ctx: Context, repo_dir: Path, output: Path, git_aware: bool = True) -> None:
     configs: list[str] = []
     for config in split_csv(ctx.config["SEMGREP_CONFIGS"]):
         configs.extend(["--config", config])
+    extra_args: list[str] = [] if git_aware else ["--no-git-ignore"]
     for image in split_csv(ctx.config["SEMGREP_IMAGES"]):
         log("INFO", f"Semgrep image: {image}")
         with output.open("w", encoding="utf-8") as handle:
@@ -579,6 +595,7 @@ def run_semgrep(ctx: Context, repo_dir: Path, output: Path) -> None:
                     "scan",
                     "--json",
                     "--quiet",
+                    *extra_args,
                     *configs,
                     "/src",
                 ],
@@ -588,6 +605,15 @@ def run_semgrep(ctx: Context, repo_dir: Path, output: Path) -> None:
             )
         if proc.returncode == 0:
             return
+        # In non-git mode, accept results even if semgrep returned non-zero due to git errors
+        if not git_aware and output.exists() and output.stat().st_size > 0:
+            try:
+                data = json.loads(output.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and "results" in data:
+                    log("WARN", f"Semgrep retourne {proc.returncode} mais des resultats ont ete produits, on continue")
+                    return
+            except json.JSONDecodeError:
+                pass
         log("WARN", f"Echec Semgrep avec l'image {image}")
     raise RuntimeError("Semgrep a echoue avec toutes les images configurees")
 
@@ -1232,7 +1258,7 @@ def analyze_deep(ctx: Context, whitelist: Path, skip_build: bool = False, repo_f
 
                 if worktree_path.exists():
                     run_process(["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(worktree_path)], check=False)
-                    shutil.rmtree(worktree_path, ignore_errors=True)
+                    force_rmtree(worktree_path)
 
                 try:
                     run_process(["git", "-C", str(repo_dir), "worktree", "add", "--detach", str(worktree_path), f"origin/{branch}"])
@@ -1241,12 +1267,17 @@ def analyze_deep(ctx: Context, whitelist: Path, skip_build: bool = False, repo_f
                     log("ERROR", f"Worktree {branch_label}: {exc}")
                     continue
 
+                # Remove the .git file (worktree link) so Docker scanners don't see a broken git path
+                worktree_git = worktree_path / ".git"
+                if worktree_git.exists():
+                    worktree_git.unlink(missing_ok=True)
+
                 files = create_manifest(worktree_path, branch_label, branch_dir / "files-manifest.json")
                 projects.append({"path_with_namespace": branch_label, "file_count": len(files)})
 
                 for scanner, func in [
                     ("detect-secrets", lambda wt=worktree_path, bd=branch_dir: run_detect_secrets(ctx, wt, bd / "detect-secrets.json")),
-                    ("Semgrep", lambda wt=worktree_path, bd=branch_dir: run_semgrep(ctx, wt, bd / "semgrep.json")),
+                    ("Semgrep", lambda wt=worktree_path, bd=branch_dir: run_semgrep(ctx, wt, bd / "semgrep.json", git_aware=False)),
                     ("heuristique", lambda wt=worktree_path, bl=branch_label, f=files, bd=branch_dir: run_heuristic(wt, bl, f, bd / "heuristic.jsonl")),
                 ]:
                     try:
@@ -1263,12 +1294,11 @@ def analyze_deep(ctx: Context, whitelist: Path, skip_build: bool = False, repo_f
                 )
                 all_findings.extend(branch_findings)
 
-                run_process(["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(worktree_path)], check=False)
-                shutil.rmtree(worktree_path, ignore_errors=True)
+                # Clean up worktree: rmtree first, then prune (git worktree remove fails without .git file)
+                force_rmtree(worktree_path)
         finally:
             run_process(["git", "-C", str(repo_dir), "worktree", "prune"], check=False)
-            if worktree_base.exists():
-                shutil.rmtree(worktree_base, ignore_errors=True)
+            force_rmtree(worktree_base)
 
     kept, ignored = whitelist_findings(all_findings, whitelist)
     report = {
