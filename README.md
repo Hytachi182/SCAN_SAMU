@@ -1,6 +1,6 @@
-﻿﻿# SAMU - Secrets Analysis & Monitoring Utility
+﻿# SAMU - Secrets Analysis & Monitoring Utility
 
-> Scan de secrets GitLab en Python, compatible Linux et Windows.
+> Scan de secrets GitLab en Python
 
 ```text
 '######:::::'###::::'##::::'##:'##::::'##:
@@ -147,4 +147,3 @@ La synchronisation force :
 - `protocol.file.allow=never`
 - scans Docker en lecture seule sur les repos clones
 
-Sur Windows, Git est configure avec Schannel pour eviter les erreurs de CA OpenSSL locales.

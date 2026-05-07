@@ -3,4 +3,6 @@ data/
 reports/
 tmp/
 *.log
+__pycache__/
+*.pyc
 
