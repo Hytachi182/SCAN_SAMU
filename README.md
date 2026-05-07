@@ -15,8 +15,8 @@
 
 ## Scanners
 
-- `gitleaks`
-- `trufflehog`
+- `gitleaks` / `gitleaks-git` (historique complet)
+- `trufflehog` / `trufflehog-git` (historique complet)
 - `detect-secrets`
 - `semgrep`
 - `heuristic`, pour les assignations suspectes et placeholders comme `proxy_password: password`
@@ -102,6 +102,40 @@ Pipeline complet puis ouverture du rapport :
 python scripts/samu.py scan-open
 ```
 
+---
+
+### Mode profond (toutes branches, historique complet)
+
+Synchroniser avec historique entier et toutes les branches :
+
+```bash
+python scripts/samu.py sync-deep
+```
+
+Analyser tous les commits et toutes les branches (repos déjà synchronisés en deep) :
+
+```bash
+python scripts/samu.py analyze-deep
+```
+
+Pipeline complet profond :
+
+```bash
+python scripts/samu.py scan-deep
+```
+
+Pipeline complet profond puis ouverture du rapport :
+
+```bash
+python scripts/samu.py scan-deep-open
+```
+
+En mode profond :
+- `sync-deep` clone sans `--depth 1` (historique complet, toutes les branches)
+- `gitleaks git` et `trufflehog git` scannent tous les commits de toutes les branches
+- `detect-secrets`, `semgrep` et `heuristic` tournent sur le tip de chaque branche via `git worktree`
+- Les findings git-history indiquent le hash court du commit et la branche dans la colonne *Line Content*
+
 ## Structure
 
 - [scripts/samu.py](./scripts/samu.py) : moteur Python complet
@@ -115,10 +149,14 @@ Les fichiers generes sont recrees sous `data/` :
 
 - `data/repos/` : repos clones
 - `data/raw/<repo>/gitleaks.json`
+- `data/raw/<repo>/gitleaks-git.json` (mode profond)
 - `data/raw/<repo>/trufflehog.jsonl`
+- `data/raw/<repo>/trufflehog-git.jsonl` (mode profond)
 - `data/raw/<repo>/detect-secrets.json`
 - `data/raw/<repo>/semgrep.json`
 - `data/raw/<repo>/heuristic.jsonl`
+- `data/raw/<repo>@<branch>/` (mode profond, une entrée par branche)
+- `data/raw/<repo>/findings-git.jsonl` (mode profond)
 - `data/raw/<repo>/files-manifest.json`
 - `data/raw/scan-errors.json`
 - `data/reports/report.json`
@@ -142,7 +180,7 @@ La synchronisation force :
 
 - API GitLab en `HTTPS`
 - verification du host GitLab avant clone
-- clone `--depth 1`, sans tags
+- clone `--depth 1` (shallow), sans tags — ou clone complet en mode `sync-deep`
 - hooks Git neutralises
 - `protocol.file.allow=never`
 - scans Docker en lecture seule sur les repos clones

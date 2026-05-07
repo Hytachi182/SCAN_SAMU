@@ -56,6 +56,71 @@
       "repoPattern": ".*",
       "filePattern": "(?i)(^|[\\\\/])package-lock\\.json$",
       "linePattern": "\"js-tokens\"\\s*:\\s*\"\\^4\\.0\\.0\""
+    },
+    {
+      "reason": "Ansible templated variable reference, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.yml$",
+      "linePattern": "(?i)password_credential\\s*:\\s*\"\\{\\{\\s*item\\.password\\s*\\}\\}\""
+    },
+    {
+      "reason": "NETBOX_TOKEN is a placeholder/dummy token used in functional tests Dockerfile",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])Dockerfile$",
+      "linePattern": "(?i)^ENV\\s+NETBOX_TOKEN=0123456789abcdef0123456789abcdef01234567\\s*$"
+    },
+    {
+      "reason": "Function parameter default value, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])ldapwrapper\\.py$",
+      "linePattern": "(?i)def\\s+__init__\\s*\\(.*password\\s*=\\s*None.*\\)"
+    },
+    {
+      "reason": "Ansible Jinja2 templated proxy username reference, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.yml$",
+      "linePattern": "(?i)proxy_username\\s*\\|\\s*urlencode"
+    },
+    {
+      "reason": "Nil UUID placeholder used as example in documentation, not a real secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])README\\.md$",
+      "linePattern": "(?i)secret_id\\s*=\\s*\"00000000-0000-0000-0000-000000000000\""
     }
   ]
 }
