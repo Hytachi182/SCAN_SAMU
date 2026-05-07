@@ -1,0 +1,49 @@
+{
+  "paths": [
+    "(?i)(^|[\\\\/])node_modules([\\\\/]|$)",
+    "(?i)(^|[\\\\/])vendor([\\\\/]|$)"
+  ],
+  "secrets": [
+    "(?i)dummy[_-]?password",
+    "(?i)example[_-]?token",
+    "(?i)changeme"
+  ],
+  "rules": [
+    {
+      "reason": "Test fixtures and sample data",
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])(tests?|fixtures?|samples?)([\\\\/]|$)"
+    },
+    {
+      "reason": "Proxy password placeholder example",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "^example/group_vars/all/secret\\.example\\.yml$",
+      "linePattern": "(?i)^\\s*proxy_password\\s*:\\s*password\\s*$"
+    },
+    {
+      "reason": "Proxy password templated variable reference",
+      "detectors": [
+        "semgrep"
+      ],
+      "ruleIds": [
+        "rules.generic-hardcoded-password-assignment"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "^roles/configure_vm/tasks/docker\\.yml$",
+      "linePattern": "(?i)proxy_password\\s*\\|\\s*urlencode"
+    },
+    {
+      "reason": "Allowlist inline detect-secrets",
+      "detectors": [
+        "detect-secrets"
+      ],
+      "ruleIds": [
+        "Inline Allowlist"
+      ]
+    }
+  ]
+}
