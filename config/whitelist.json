@@ -44,6 +44,18 @@
       "ruleIds": [
         "Inline Allowlist"
       ]
+    },
+    {
+      "reason": "js-tokens is a well-known npm package, not a secret",
+      "detectors": [
+        "semgrep"
+      ],
+      "ruleIds": [
+        "rules.generic-hardcoded-secret-assignment"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])package-lock\\.json$",
+      "linePattern": "\"js-tokens\"\\s*:\\s*\"\\^4\\.0\\.0\""
     }
   ]
 }
