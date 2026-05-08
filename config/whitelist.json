@@ -1,7 +1,8 @@
 {
   "paths": [
     "(?i)(^|[\\\\/])node_modules([\\\\/]|$)",
-    "(?i)(^|[\\\\/])vendor([\\\\/]|$)"
+    "(?i)(^|[\\\\/])vendor([\\\\/]|$)",
+    "(?i)\\.svg$"
   ],
   "secrets": [
     "(?i)dummy[_-]?password",
@@ -9,11 +10,6 @@
     "(?i)changeme"
   ],
   "rules": [
-    {
-      "reason": "Test fixtures and sample data",
-      "repoPattern": ".*",
-      "filePattern": "(?i)(^|[\\\\/])(tests?|fixtures?|samples?)([\\\\/]|$)"
-    },
     {
       "reason": "Proxy password placeholder example",
       "detectors": [
@@ -179,6 +175,14 @@
       "filePattern": "(?i)(^|[\\\\/])package-lock\\.json$"
     },
     {
+      "reason": "poetry.lock is auto-generated; package wheel hashes (sha256) and dependency specs are not secrets",
+      "detectors": [
+        "semgrep"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])poetry\\.lock$"
+    },
+    {
       "reason": "PASSWORD: '$PASSWORD' is a shell variable reference in CI, not a hardcoded secret",
       "detectors": [
         "semgrep"
@@ -311,6 +315,862 @@
       "repoPattern": ".*",
       "filePattern": ".*\\.yml$",
       "linePattern": "(?i)update_password\\s*:\\s*\"\\{\\{\\s*item\\.update_password\\s*\\}\\}\""
+    },
+    {
+      "reason": "Ansible adminpwd lookup from environment variable, not a hardcoded secret",
+      "detectors": [
+        "semgrep"
+      ],
+      "ruleIds": [
+        "rules.generic-default-password-value"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.yml$",
+      "linePattern": "(?i)adminpwd\\s*:\\s*\"\\{\\{\\s*lookup\\s*\\(\\s*'ansible\\.builtin\\.env'\\s*,\\s*'ansible_temp_password'\\s*\\)\\s*\\}\\}\""
+    },
+    {
+      "reason": "Ansible password lookup from environment variable (vcenter), not a hardcoded secret",
+      "detectors": [
+        "semgrep"
+      ],
+      "ruleIds": [
+        "rules.generic-hardcoded-password-assignment"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.yml(\\.old)?$",
+      "linePattern": "(?i)password\\s*:\\s*\"\\{\\{\\s*lookup\\s*\\(\\s*'ansible\\.builtin\\.env'\\s*,\\s*'vcenter_password'\\s*\\)\\s*\\}\\}\""
+    },
+    {
+      "reason": "Generic Ansible/Jinja2 templated credential reference in YAML — variable, not a hardcoded value",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)(?:password|secret|token|apikey|api_key|pwd|pass|url_password|awx_password|vcenter_password|tower_password)\\s*:\\s*['\"]?\\{\\{.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "Password/secret/token assigned null, None, or empty string in YAML — not a real credential",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)(?:password|secret|token|apikey|api_key|pwd)\\s*:\\s*(?:null|None|\"\"|'')\\s*$"
+    },
+    {
+      "reason": "Any YAML key containing token/secret/password set to empty string — placeholder, not a real credential",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)\\w*(?:token|secret|password|apikey|api_key|pwd)\\w*\\s*:\\s*(\"\"|'')\\s*$"
+    },
+    {
+      "reason": "Password/secret/token assigned an angle-bracket template placeholder, not a real credential",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)(?:password|secret|token|apikey|api_key|pwd)\\s*[=:]\\s*<[^>]+>"
+    },
+    {
+      "reason": "Shell or environment variable reference assigned to password/secret/token — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)(?:password|secret|token|apikey|api_key|pwd)\\s*[=:]\\s*['\"]?\\$(?:\\{[A-Za-z_][A-Za-z0-9_]*\\}|[A-Z_][A-Z0-9_]*)['\"]?"
+    },
+    {
+      "reason": "Shell export of TOKEN/SECRET/PASSWORD from an environment variable — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)export\\s+\\w*(?:TOKEN|SECRET|PASSWORD)\\s*=\\s*\\$\\{"
+    },
+    {
+      "reason": "Token/secret/apikey read from Django settings attribute or decouple config() — not hardcoded",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)(?:token|secret|apikey|api_key|password)\\s*=\\s*(?:settings\\.[A-Za-z_]+|config\\(['\"])"
+    },
+    {
+      "reason": "CPE (Common Platform Enumeration) identifier in SBOM/dependency scan output — not a secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)\"referenceLocator\"\\s*:\\s*\"cpe:2\\.3:"
+    },
+    {
+      "reason": "SPDX packageVerificationCodeValue is a content hash for SBOM integrity verification — not a secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)\"packageVerificationCodeValue\""
+    },
+    {
+      "reason": "Hashicorp Vault secret path reference in documentation/comments — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)key of the following secret in Hashicorp Vault"
+    },
+    {
+      "reason": "sshpass uses Ansible Jinja2 variable reference for password — not a hardcoded credential",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)sshpass\\s+-p\\s+['\"]?\\{\\{.*?\\}\\}['\"]?"
+    },
+    {
+      "reason": "Ansible lookup 'secret' parameter references Vault path via Jinja2 template — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)'secret=\\{\\{.*?\\}\\}:"
+    },
+    {
+      "reason": "Docker volume mount using shell variable ${pwd} or $pwd — not a secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)-v\\$\\{?pwd\\}?/"
+    },
+    {
+      "reason": "enc_token_url constructed from provider host variable — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)enc_token_url\\s*=\\s*'https://"
+    },
+    {
+      "reason": "X-Bluecoat-Enc-Token HTTP header assigned from variable enc_token.rstrip() — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)'X-Bluecoat-Enc-Token'\\s*:\\s*enc_token\\.rstrip\\(\\)"
+    },
+    {
+      "reason": "vault_namespace/vault_path keys assigned from Jinja2 filter expression — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)vault_(?:namespace|path)(?:_mgt)?\\s*:\\s*['\"]?\\{\\{.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "private_key_pwd key assigned from Jinja2 variable reference — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)private_key_pwd\\w*\\s*:\\s*['\"]?\\{\\{.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "Ansible lookup from Vault approle with .secret.passphrase — runtime secret retrieval, not hardcoded",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)secret_id\\s*=\\s*\\w+,\\s*auth_method\\s*=\\s*'approle'\\)?\\.secret\\.passphrase"
+    },
+    {
+      "reason": "Ansible lookup('env', ...) for Docker registry password — environment variable reference, not hardcoded",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)\\w*(?:docker_registry_)?password\\s*:\\s*['\"]?\\{\\{\\s*lookup\\s*\\(\\s*'env'\\s*,"
+    },
+    {
+      "reason": "Dockerfile ENV token/password set to empty string — not a real credential",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])Dockerfile(\\..*)?$",
+      "linePattern": "(?i)^ENV\\s+\\w*(?:TOKEN|SECRET|PASSWORD|PWD)\\w*\\s*=\\s*(\"\"|'')\\s*$"
+    },
+    {
+      "reason": "Shell export of VAULT_TOKEN from command substitution $(...) — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)export\\s+\\w*(?:TOKEN|SECRET|PASSWORD)\\s*=\\s*\\$\\("
+    },
+    {
+      "reason": "vault write auth/approle/login uses env-var role_id/secret_id — not hardcoded credentials",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)vault\\s+write\\s+auth/approle/login\\s+role_id=\\$\\{?\\w+\\}?\\s+secret_id=\\$\\{?\\w+\\}?"
+    },
+    {
+      "reason": "Python string literal containing a secret-keyword regex pattern — part of detection tooling, not a real secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)['\"](?:password|secret|token|apikey|pwd):\\\\s\\*"
+    },
+    {
+      "reason": "Auto-generated API client Python class with Token/Secret in name — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)^class\\s+\\w*(?:Token|Secret|Credential)\\w*\\s*:"
+    },
+    {
+      "reason": "Auto-generated API client instantiation via cls() classmethod — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)\\w*(?:token|secret|credential)\\w*\\s*=\\s*cls\\s*\\("
+    },
+    {
+      "reason": "Auto-generated API client .additional_properties = d pattern — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)\\w+\\.additional_properties\\s*=\\s*\\w+"
+    },
+    {
+      "reason": "token passed as keyword argument from credentials object — runtime value, not hardcoded",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)token\\s*=\\s*credentials\\.token"
+    },
+    {
+      "reason": "token function/method parameter with None or str default — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)token\\s*:\\s*(?:str\\s*\\|\\s*None|Optional\\[str\\])\\s*=\\s*None"
+    },
+    {
+      "reason": "API client __init__ passing token variable as keyword argument — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)self\\._base\\s*=\\s*\\w+\\s*\\(.*token\\s*=\\s*token.*\\)"
+    },
+    {
+      "reason": "Dataclass field reading token from environment via _default_env helper — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)token\\s*:\\s*str\\s*=\\s*field\\s*\\(\\s*default_factory\\s*=\\s*lambda\\s*:\\s*_default_env\\s*\\("
+    },
+    {
+      "reason": "Auto-generated OpenAPI/Netbox client: secret_* typed as Union[Unset, ...] = UNSET — filter parameter, not a credential",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)\\bjson_secret_\\w+\\s*:\\s*Union\\[Unset,"
+    },
+    {
+      "reason": "Auto-generated OpenAPI/Netbox client: params dict assignment of secret_* filter — not a credential",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)params\\[\\s*['\"]secret_\\w+['\"]\\s*\\]\\s*="
+    },
+    {
+      "reason": "Auto-generated OpenAPI/Netbox client: json_secret_* = secret_* local variable serialization — not a credential",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)json_secret_\\w+\\s*=\\s*secret_\\w+"
+    },
+    {
+      "reason": "Auto-generated OpenAPI/Netbox client: isinstance Unset guard on secret_* — not a credential",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)if\\s+not\\s+isinstance\\s*\\(\\s*secret_\\w+\\s*,\\s*Unset\\s*\\)"
+    },
+    {
+      "reason": "Auto-generated OpenAPI/Netbox client: function parameter named secret_* with Union[Unset, ...] type — filter arg, not a credential",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)\\bsecret_(?:empty|ic|ie|iew|isw|n|nic|nie|niew|nisw)\\s*(?:\\(|:)\\s*Union\\[Unset,"
+    },
+    {
+      "reason": "Ansible VAR_NETBOX_TOKEN assigned from Jinja2 variable or Vault result — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)VAR_NETBOX_TOKEN\\s*:\\s*['\"]?\\{\\{.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "Ansible Netbox nb_lookup query with token=VAR_NETBOX_TOKEN — runtime variable, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)(?:loop|subnets)\\s*:\\s*['\"]?\\{\\{\\s*query\\s*\\(\\s*'netbox\\.netbox\\.nb_lookup'"
+    },
+    {
+      "reason": "Ansible become password from Vault result dict — runtime value, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)ansible_become_password\\s*:\\s*['\"]?\\{\\{\\s*vault_result\\.password\\s*\\}\\}['\"]?"
+    },
+    {
+      "reason": "Ansible bare variable name VAR_NETBOX_TOKEN used as YAML value — variable reference, not a hardcoded token",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)token\\s*[=:]\\s*VAR_NETBOX_TOKEN\\b"
+    },
+    {
+      "reason": "CI shell env assignment of API_KEY/API_TOKEN from shell variable — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)API[_-](?:KEY|TOKEN)\\s*=\\s*['\"]?\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?['\"]?"
+    },
+    {
+      "reason": "Robot Framework -v API_TOKEN: CLI argument with shell variable reference — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)-v\\s+API[_-]TOKEN:['\"]?\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?['\"]?"
+    },
+    {
+      "reason": "Ansible lookup('env', '...') with optional | default() filter — environment variable reference, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)\\{\\{\\s*lookup\\s*\\(\\s*'env'\\s*,\\s*'[A-Za-z0-9_]+'\\s*\\)(?:\\s*\\|\\s*default\\s*\\(.*?\\))?\\s*\\}\\}"
+    },
+    {
+      "reason": "ALLCAPS Ansible variable key assigned from Jinja2 lookup('env', ...) — environment variable reference, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)[A-Z][A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|SECRET_ID|API_PASSWORD|REGISTRY_PASSWORD)\\s*:\\s*['\"]?\\{\\{.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "awx_token assigned from AWX API JSON response — runtime token, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)awx_token\\s*:\\s*['\"]?\\{\\{\\s*awx_token(?:_response\\.json\\.token|\\s*)?\\}\\}['\"]?"
+    },
+    {
+      "reason": "controller_password assigned from Ansible lookup('env', ...) — environment variable reference, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)controller_password\\s*:\\s*['\"]?\\{\\{.+?lookup\\s*\\(\\s*'env'.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "PRIVATE-TOKEN HTTP header (hyphenated key) assigned from Jinja2 variable — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)PRIVATE-TOKEN\\s*:\\s*['\"]?\\{\\{.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "secret_value assigned null or empty YAML block scalar (>-) — placeholder variable, not a real secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)secret_value\\s*:\\s*(null|>-?)\\s*$"
+    },
+    {
+      "reason": "secret_exists boolean check on secret_value variable — conditional expression, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)secret_exists\\s*:\\s*['\"]?\\{\\{.+?is not none.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "Ansible debug msg referencing secret_exists boolean variable — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)msg\\s*:\\s*['\"]Secret exists\\s*:\\s*\\{\\{\\s*secret_exists\\s*\\}\\}['\"]"
+    },
+    {
+      "reason": "community.aws.secretsmanager_secret is an Ansible module name — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)community\\.aws\\.secretsmanager_secret\\s*:"
+    },
+    {
+      "reason": "secret key assigned from Jinja2 privatekey/publickey/passphrase result variable — runtime value, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)secret\\s*:\\s*['\"]?\\{\\{\\s*(?:privatekey_result|publickey_result|ssh_passphrase)\\b.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "Python SECRET_KEY read from environment variable via os.environ.get — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)\\w*(?:SECRET_KEY|SECRET|PASSWORD|TOKEN)\\w*\\s*=\\s*os\\.environ\\.get\\s*\\("
+    },
+    {
+      "reason": "Python guard: if os.environ.get('...SECRET...') — conditional env var check, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)if\\s+os\\.environ\\.get\\s*\\(\\s*['\"]\\w*(?:SECRET|PASSWORD|TOKEN|KEY)\\w*['\"]"
+    },
+    {
+      "reason": "Python SECRET_KEY read from file on disk (e.g. /etc/tower/SECRET_KEY) — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)(?:with\\s+open\\s*\\(.*SECRET_KEY.*\\)|SECRET_KEY\\s*=\\s*f\\.read\\s*\\(\\s*\\)\\.strip\\s*\\(\\s*\\))"
+    },
+    {
+      "reason": "Python check for existence of a secret key file on disk — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)if\\s+os\\.path\\.exists\\s*\\(\\s*['\"].*(?:SECRET_KEY|secret)['\"]"
+    },
+    {
+      "reason": "Python SECRET_KEY generated from cryptographically random bytes (os.urandom) — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)SECRET_KEY\\s*=\\s*base64\\.encodebytes\\s*\\(\\s*os\\.urandom\\s*\\("
+    },
+    {
+      "reason": "Shell/env variable reference for DJANGO_SUPERUSER_PASSWORD, AWX_SECRET_KEY, POSTGRES_PASSWORD — not hardcoded",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)(?:DJANGO_SUPERUSER_PASSWORD|AWX_SECRET_KEY|POSTGRES_PASSWORD|POSTGRES_DEFAULT_PASSWORD)\\s*[=:]\\s*['\"]?\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?['\"]?"
+    },
+    {
+      "reason": "Any YAML key containing password/secret/token/key assigned from Jinja2 expression — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)\\w*(?:password|secret_key|secret|token|apikey|api_key|pwd)\\w*\\s*:\\s*['\"]?(?:Token\\s+)?\\{\\{.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "Ansible hostvars reference for netbox_token or similar — runtime inventory value, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(yml|yaml)$",
+      "linePattern": "(?i)\\w*(?:token|secret|password|key)\\w*\\s*:\\s*['\"]?(?:Token\\s+)?\\{\\{\\s*hostvars\\s*\\[.+?\\}\\}['\"]?"
+    },
+    {
+      "reason": "Python secret_key = lookup('env', ...) assignment (no Jinja2) — environment variable reference, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)\\w*(?:secret_key|secret|password|token|apikey|api_key|pwd)\\w*\\s*=\\s*lookup\\s*\\(\\s*'env'\\s*,"
+    },
+    {
+      "reason": "Python token/id_token/refresh_token extracted from API JSON response dict — runtime value, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)\\w*(?:token|secret|password|key)\\w*\\s*=\\s*\\w+\\s*\\[\\s*['\"](?:access_token|id_token|refresh_token|token)['\"]\\s*\\]"
+    },
+    {
+      "reason": "OAuth 2.0 standard URN token type string — protocol identifier, not a secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)['\"](?:subject|requested)_token_type['\"]\\s*:\\s*['\"]urn:ietf:params:oauth:token-type:"
+    },
+    {
+      "reason": "refresh_token_max_age is a numeric TTL configuration value — not a secret",
+      "detectors": [
+        "semgrep",
+        "heuristic"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.py$",
+      "linePattern": "(?i)['\"]refresh_token_max_age['\"]\\s*:\\s*\\d+"
+    },
+    {
+      "reason": "EULOGIN_*_SECRET env var set to empty string or shell variable reference — not a real secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)EULOGIN_\\w+(?:SECRET|PASSWORD|TOKEN)\\s*[=:]\\s*['\"]?(?:\"|''|\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?)['\"]?"
+    },
+    {
+      "reason": "js-tokens package reference in any lock or dependency file (yarn.lock, pip, etc.) — npm/pip package name, not a secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])(yarn\\.lock|requirements.*\\.txt|Pipfile\\.lock|pip.*\\.txt)$",
+      "linePattern": "(?i)js-tokens"
+    },
+    {
+      "reason": "Squid proxy error page template: username/password error message using $(exception.last_error) — not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*",
+      "linePattern": "(?i)while preparing to send your username.password upstream"
+    },
+    {
+      "reason": "HTML password form element (div/form/input/label) — UI markup, not a hardcoded secret",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": ".*\\.(html?|j2|jinja2?|erb|tmpl?)$",
+      "linePattern": "(?i)<(?:div|form|label|input)[^>]*(?:id|for|name)\\s*=\\s*['\"]?(?:passwordForm|pwinput|password)['\"]?"
+    },
+    {
+      "reason": "HTML file or Squid error template — static markup files never contain real secrets",
+      "detectors": [
+        "semgrep",
+        "heuristic",
+        "detect-secrets",
+        "gitleaks",
+        "trufflehog"
+      ],
+      "repoPattern": ".*",
+      "filePattern": "(?i)(^|[\\\\/])ERR_[A-Z_]+$"
     }
   ]
 }

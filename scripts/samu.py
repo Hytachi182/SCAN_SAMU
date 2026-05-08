@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import html
 import json
 import os
@@ -141,6 +142,7 @@ def init_context(secrets_file: Path) -> Context:
     config.setdefault("TRUFFLEHOG_IMAGES", "trufflesecurity/trufflehog:latest")
     config.setdefault("SEMGREP_IMAGES", "semgrep/semgrep:latest")
     config.setdefault("SEMGREP_CONFIGS", "/rules/semgrep-secrets.yml,p/secrets")
+    config.setdefault("GGSHIELD_IMAGE", "gitguardian/ggshield:latest")
     config.setdefault("GITLAB_CURL_SSL_NO_REVOKE", "false")
 
     workspace = Path(config["WORKSPACE_DIR"])
@@ -551,6 +553,64 @@ def run_trufflehog_git(ctx: Context, repo_dir: Path, output: Path) -> None:
     raise RuntimeError("TruffleHog-git a echoue avec toutes les images configurees")
 
 
+def run_ggshield(ctx: Context, repo_dir: Path, output: Path) -> None:
+    """Scan working tree with ggshield path scan. Silently skipped if no GITGUARDIAN_API_KEY."""
+    api_key = ctx.config.get("GITGUARDIAN_API_KEY", "")
+    if not api_key:
+        return
+    image = ctx.config["GGSHIELD_IMAGE"]
+    log("INFO", f"ggshield image: {image}")
+    with output.open("w", encoding="utf-8") as handle:
+        proc = subprocess.run(
+            [
+                "docker", "run", "--rm",
+                "-e", "GITGUARDIAN_API_KEY",
+                "-v", f"{docker_mount_path(repo_dir)}:/repo:ro",
+                image,
+                "secret", "scan", "path",
+                "--json",
+                "-r",
+                "/repo",
+            ],
+            env={**os.environ, "GITGUARDIAN_API_KEY": api_key, "MSYS_NO_PATHCONV": "1"},
+            text=True,
+            stdout=handle,
+        )
+    # exit 1 means secrets found (not an error); only other codes are real failures
+    if proc.returncode not in (0, 1):
+        raise RuntimeError(f"ggshield a echoue (code {proc.returncode})")
+    if not output.exists() or not output.read_text(encoding="utf-8").strip():
+        output.write_text("{}", encoding="utf-8")
+
+
+def run_ggshield_git(ctx: Context, repo_dir: Path, output: Path) -> None:
+    """Scan full git history with ggshield repo scan. Silently skipped if no GITGUARDIAN_API_KEY."""
+    api_key = ctx.config.get("GITGUARDIAN_API_KEY", "")
+    if not api_key:
+        return
+    image = ctx.config["GGSHIELD_IMAGE"]
+    log("INFO", f"ggshield-git image: {image}")
+    with output.open("w", encoding="utf-8") as handle:
+        proc = subprocess.run(
+            [
+                "docker", "run", "--rm",
+                "-e", "GITGUARDIAN_API_KEY",
+                "-v", f"{docker_mount_path(repo_dir)}:/repo:ro",
+                image,
+                "secret", "scan", "repo",
+                "--json",
+                "/repo",
+            ],
+            env={**os.environ, "GITGUARDIAN_API_KEY": api_key, "MSYS_NO_PATHCONV": "1"},
+            text=True,
+            stdout=handle,
+        )
+    if proc.returncode not in (0, 1):
+        raise RuntimeError(f"ggshield-git a echoue (code {proc.returncode})")
+    if not output.exists() or not output.read_text(encoding="utf-8").strip():
+        output.write_text("{}", encoding="utf-8")
+
+
 def run_detect_secrets(ctx: Context, repo_dir: Path, output: Path) -> None:
     with output.open("w", encoding="utf-8") as handle:
         proc = subprocess.run(
@@ -804,6 +864,32 @@ def normalize_findings(name: str, directory: Path, repo_dir: Path | None = None)
         for line in heuristic.read_text(encoding="utf-8", errors="replace").splitlines():
             if line.strip():
                 findings.append(json.loads(line))
+
+    for entity in (read_json(directory / "ggshield.json", {}).get("entities_with_incidents") or []):
+        file_path = re.sub(r"^/repo/?", "", entity.get("filename", ""))
+        for incident in (entity.get("incidents") or []):
+            detector = incident.get("detector") or {}
+            rule_id = detector.get("detector_group_name") or detector.get("name") or ""
+            for occ in (incident.get("occurrences") or []):
+                line_no = occ.get("line_start", 0) or 0
+                findings.append(
+                    {
+                        "repo": name,
+                        "scanner": "ggshield",
+                        "rule": rule_id,
+                        "description": detector.get("display_name") or "ggshield detection",
+                        "file": file_path,
+                        "line": line_no,
+                        "endLine": occ.get("line_end", line_no) or line_no,
+                        "lineText": read_source_line(repo_dir, file_path, line_no),
+                        "secret": occ.get("match") or "",
+                        "fingerprint": f"ggshield:{file_path}:{line_no}:{rule_id}",
+                        "severity": incident.get("severity") or "",
+                        "verified": incident.get("validity") == "valid",
+                        "source": "working-tree",
+                    }
+                )
+
     return findings
 
 
@@ -866,6 +952,35 @@ def normalize_git_findings(name: str, directory: Path) -> list[dict[str, Any]]:
                     "branch": branch,
                 }
             )
+
+    for entity in (read_json(directory / "ggshield-git.json", {}).get("entities_with_incidents") or []):
+        file_path = entity.get("filename", "")
+        commit = entity.get("commit", "")
+        short_commit = commit[:8] if commit else "?"
+        for incident in (entity.get("incidents") or []):
+            detector = incident.get("detector") or {}
+            rule_id = detector.get("detector_group_name") or detector.get("name") or ""
+            for occ in (incident.get("occurrences") or []):
+                line_no = occ.get("line_start", 0) or 0
+                findings.append(
+                    {
+                        "repo": name,
+                        "scanner": "ggshield-git",
+                        "rule": rule_id,
+                        "description": detector.get("display_name") or "ggshield git detection",
+                        "file": file_path,
+                        "line": line_no,
+                        "endLine": occ.get("line_end", line_no) or line_no,
+                        "lineText": f"[{short_commit}] {entity.get('author', '')} — {entity.get('date', '')}",
+                        "secret": occ.get("match") or "",
+                        "fingerprint": f"ggshield-git:{file_path}:{line_no}:{short_commit}",
+                        "severity": incident.get("severity") or "",
+                        "verified": incident.get("validity") == "valid",
+                        "source": "git-history",
+                        "commit": commit,
+                    }
+                )
+
     return findings
 
 
@@ -916,7 +1031,25 @@ def whitelist_findings(findings: list[dict[str, Any]], whitelist_path: Path) -> 
     return sorted(kept, key=key), sorted(ignored, key=key)
 
 
-def html_report(report: dict[str, Any]) -> str:
+def write_findings_csv(findings: list[dict[str, Any]], path: Path) -> None:
+    import csv, io
+    headers = ["Repository", "Scanner", "Rule", "File", "Line", "Line Content", "Secret", "Severity", "Verified", "Description"]
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(headers)
+    for f in findings:
+        w.writerow([
+            f.get("repo", ""), f.get("scanner", ""), f.get("rule", ""),
+            f.get("file", ""), f.get("line", ""),
+            (f.get("lineText") or "").strip(),
+            f.get("secret", ""), f.get("severity", ""),
+            "verified" if f.get("verified") else "no",
+            f.get("description", ""),
+        ])
+    path.write_text("\ufeff" + buf.getvalue(), encoding="utf-8")
+
+
+def html_report(report: dict[str, Any], csv_name: str = "report.csv") -> str:
     findings = report["findings"]
     ignored = report["ignored"]
     projects = report["projects"]
@@ -936,6 +1069,7 @@ def html_report(report: dict[str, Any]) -> str:
         ("Sync", "GitLab clone"),
         ("Gitleaks", "Secrets rules"),
         ("TruffleHog", "Verified and unknown secrets"),
+        ("ggshield", "GitGuardian secret detection"),
         ("detect-secrets", "Entropy and token detectors"),
         ("Semgrep", "Local and registry rules"),
         ("Heuristic", "Password assignments"),
@@ -1013,18 +1147,75 @@ h1{{margin:0;font-size:30px;color:#10233f}}h2{{margin:0 0 14px;color:#10233f}}.s
 table{{width:100%;border-collapse:collapse;font-size:14px}}td,th{{border-bottom:1px solid #e3eaf5;padding:9px;text-align:left;vertical-align:top}}th{{background:#eef4ff;color:#334155;position:sticky;top:0}}.scroll{{overflow:auto;max-height:560px}}
 .badge{{display:inline-block;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:700;white-space:nowrap}}.danger{{background:#fee2e2;color:#991b1b}}.warning{{background:#fef3c7;color:#92400e}}.info{{background:#dbeafe;color:#1e40af}}.ok{{background:#dcfce7;color:#166534}}.muted-badge{{background:#e5e7eb;color:#374151}}.scanner-name{{font-weight:700;color:#10233f}}
 .line-text{{font-family:Consolas,Courier New,monospace;font-size:12px;background:#f1f5f9;border-radius:4px;padding:2px 5px;white-space:pre;display:block;max-width:420px;overflow:auto;color:#1e293b}}
+.export-btn{{display:inline-flex;align-items:center;gap:6px;margin-bottom:12px;padding:7px 16px;background:#1d4ed8;color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:13px;text-decoration:none}}.export-btn:hover{{background:#1e40af}}
 </style></head><body>
 <main class="shell">
 <section class="hero">{logo_html}<div><h1>SAMU - Secrets Analysis & Monitoring Utility</h1><p class="subtitle">Group / target: {html.escape(report['groupPath'])}<br>Scan generated at {html.escape(report['generatedAt'])}</p></div></section>
 <div class="cards"><div class="card"><div class="label">Repositories scanned</div><div class="value">{report['repoCount']}</div></div><div class="card"><div class="label">Files scanned</div><div class="value">{report['fileCount']}</div></div><div class="card"><div class="label">Findings kept</div><div class="value">{len(findings)}</div></div><div class="card"><div class="label">Whitelisted findings</div><div class="value">{len(ignored)}</div></div><div class="card"><div class="label">Scan errors</div><div class="value">{len(scan_errors)}</div></div></div>
 <div class="panel"><h2>Scan Workflow</h2><div class="workflow">{workflow_steps()}</div></div>
-<div class="panel"><h2>Scanner Coverage</h2><table><thead><tr><th>Scanner</th><th>Scope</th></tr></thead><tbody><tr><td><span class="scanner-name">Gitleaks-git</span></td><td>All commits across all branches &mdash; full git history</td></tr><tr><td><span class="scanner-name">TruffleHog-git</span></td><td>All commits across all branches &mdash; full git history</td></tr><tr><td><span class="scanner-name">detect-secrets</span></td><td>Tip (latest state) of each branch</td></tr><tr><td><span class="scanner-name">Semgrep</span></td><td>Tip (latest state) of each branch</td></tr><tr><td><span class="scanner-name">Heuristic</span></td><td>Tip (latest state) of each branch</td></tr></tbody></table></div>
+<div class="panel"><h2>Scanner Coverage</h2><table><thead><tr><th>Scanner</th><th>Scope</th></tr></thead><tbody><tr><td><span class="scanner-name">Gitleaks-git</span></td><td>All commits across all branches &mdash; full git history</td></tr><tr><td><span class="scanner-name">TruffleHog-git</span></td><td>All commits across all branches &mdash; full git history</td></tr><tr><td><span class="scanner-name">ggshield-git</span></td><td>All commits across all branches &mdash; full git history (requires GITGUARDIAN_API_KEY)</td></tr><tr><td><span class="scanner-name">detect-secrets</span></td><td>Tip (latest state) of each branch</td></tr><tr><td><span class="scanner-name">Semgrep</span></td><td>Tip (latest state) of each branch</td></tr><tr><td><span class="scanner-name">ggshield</span></td><td>Tip (latest state) of each branch (requires GITGUARDIAN_API_KEY)</td></tr><tr><td><span class="scanner-name">Heuristic</span></td><td>Tip (latest state) of each branch</td></tr></tbody></table></div>
 <div class="panel"><h2>Summary By Scanner</h2><table><thead><tr><th>Scanner</th><th>Findings</th></tr></thead><tbody>{scanner_rows()}</tbody></table></div>
 <div class="panel"><h2>Summary By Repository</h2><div class="scroll"><table><thead><tr><th>Repository</th><th>Files</th><th>Findings</th></tr></thead><tbody>{project_rows()}</tbody></table></div></div>
-<div class="panel"><h2>Finding Details</h2><div class="scroll"><table><thead><tr><th>Repository</th><th>Scanner</th><th>Rule</th><th>File</th><th>Line</th><th>Line Content</th><th>Secret</th><th>Status</th><th>Verified</th><th>Description</th></tr></thead><tbody>{finding_rows(findings)}</tbody></table></div></div>
+<div class="panel"><h2>Finding Details</h2><a class="export-btn" href="{csv_name}">&#11015; Export Excel (CSV)</a><div class="scroll" id="findings-scroll"><table id="findings-table"><thead><tr><th>Repository</th><th>Scanner</th><th>Rule</th><th>File</th><th>Line</th><th>Line Content</th><th>Secret</th><th>Status</th><th>Verified</th><th>Description</th></tr></thead><tbody>{finding_rows(findings)}</tbody></table></div></div>
 <div class="panel"><h2>Whitelisted Findings</h2><div class="scroll"><table><thead><tr><th>Repository</th><th>Scanner</th><th>File</th><th>Line</th><th>Reason</th></tr></thead><tbody>{ignored_rows()}</tbody></table></div></div>
 <div class="panel"><h2>Scan Errors</h2><div class="scroll"><table><thead><tr><th>Repository</th><th>Scanner</th><th>Error</th></tr></thead><tbody>{error_rows()}</tbody></table></div></div>
-</main></body></html>
+</main>
+<script>(function(){{
+  var tbl=document.getElementById('findings-table');
+  if(!tbl)return;
+  var rows=[].slice.call(tbl.querySelector('tbody').querySelectorAll('tr'));
+  var total=rows.length;var filtered=rows.slice();var page=1;var pageSize=0;
+  var ctrl=document.createElement('div');
+  ctrl.style='display:flex;gap:12px;align-items:center;margin-bottom:10px;flex-wrap:wrap';
+  var search=document.createElement('input');search.type='search';search.placeholder='Filter findings...';
+  search.style='flex:1;min-width:220px;padding:7px 10px;border:1px solid #d7e1f2;border-radius:6px;font-size:13px';
+  var szLabel=document.createElement('label');szLabel.style='font-size:13px;color:#334155;display:flex;align-items:center;gap:5px';
+  szLabel.appendChild(document.createTextNode('Show '));
+  var szSel=document.createElement('select');szSel.style='padding:5px 8px;border:1px solid #d7e1f2;border-radius:6px;font-size:13px';
+  [{{v:0,t:'All'}},{{v:50,t:'50'}},{{v:100,t:'100'}},{{v:250,t:'250'}}].forEach(function(o){{
+    var opt=document.createElement('option');opt.value=o.v;opt.text=o.t;
+    if(o.v===0)opt.selected=true;szSel.appendChild(opt);
+  }});
+  szLabel.appendChild(szSel);szLabel.appendChild(document.createTextNode(' entries'));
+  var info=document.createElement('span');info.style='font-size:13px;color:#68758a;white-space:nowrap';
+  ctrl.appendChild(search);ctrl.appendChild(szLabel);ctrl.appendChild(info);
+  tbl.closest('.panel').insertBefore(ctrl,document.getElementById('findings-scroll'));
+  function render(){{
+    var ps=pageSize,start=ps?(page-1)*ps:0,end=ps?start+ps:filtered.length;
+    rows.forEach(function(r){{r.style.display='none';}});
+    filtered.slice(start,end).forEach(function(r){{r.style.display='';}});
+    info.textContent='Showing '+(filtered.length?start+1:0)+'\u2013'+Math.min(end,filtered.length)+' of '+filtered.length+' (total '+total+')';
+    renderPager(ps);
+  }}
+  function renderPager(ps){{
+    var old=document.getElementById('findings-pager');if(old)old.remove();
+    if(!ps||filtered.length<=ps)return;
+    var pages=Math.ceil(filtered.length/ps);
+    var nav=document.createElement('div');nav.id='findings-pager';
+    nav.style='display:flex;gap:5px;margin-top:8px;flex-wrap:wrap';
+    function btn(label,target,active,disabled){{
+      var b=document.createElement('button');b.textContent=label;b.disabled=disabled;
+      b.style='padding:4px 10px;border:1px solid #d7e1f2;border-radius:5px;cursor:pointer;font-size:13px;background:'+(active?'#1d4ed8':'#fff')+';color:'+(active?'#fff':'#334155');
+      if(!disabled)b.onclick=function(){{page=target;render();}};return b;
+    }}
+    nav.appendChild(btn('\u00ab',1,false,page===1));nav.appendChild(btn('\u2039',page-1,false,page===1));
+    var s=Math.max(1,page-2),e=Math.min(pages,s+4);
+    for(var p=s;p<=e;p++)nav.appendChild(btn(p,p,p===page,false));
+    nav.appendChild(btn('\u203a',page+1,false,page===pages));nav.appendChild(btn('\u00bb',pages,false,page===pages));
+    document.getElementById('findings-scroll').appendChild(nav);
+  }}
+  var timer;
+  search.addEventListener('input',function(){{
+    clearTimeout(timer);timer=setTimeout(function(){{
+      var q=search.value.toLowerCase();
+      filtered=q?rows.filter(function(r){{return r.textContent.toLowerCase().indexOf(q)!==-1;}}):rows.slice();
+      page=1;render();
+    }},200);
+  }});
+  szSel.addEventListener('change',function(){{pageSize=parseInt(szSel.value);page=1;render();}});
+  render();
+}})();</script>
+</body></html>
 """
 
 
@@ -1057,6 +1248,7 @@ def analyze(ctx: Context, whitelist: Path, skip_build: bool = False, repo_filter
             ("detect-secrets", lambda: run_detect_secrets(ctx, repo_dir, directory / "detect-secrets.json")),
             ("Semgrep", lambda: run_semgrep(ctx, repo_dir, directory / "semgrep.json")),
             ("heuristique", lambda: run_heuristic(repo_dir, name, files, directory / "heuristic.jsonl")),
+            ("ggshield", lambda: run_ggshield(ctx, repo_dir, directory / "ggshield.json")),
         ]
         for scanner, func in scanner_steps:
             try:
@@ -1092,7 +1284,8 @@ def analyze(ctx: Context, whitelist: Path, skip_build: bool = False, repo_filter
     (ctx.reports / "findings.kept.json").write_text(json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
     (ctx.reports / "findings.ignored.json").write_text(json.dumps(ignored, ensure_ascii=False, indent=2), encoding="utf-8")
     (ctx.reports / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    (ctx.reports / "report.html").write_text(html_report(report), encoding="utf-8")
+    write_findings_csv(kept, ctx.reports / "report.csv")
+    (ctx.reports / "report.html").write_text(html_report(report, "report.csv"), encoding="utf-8")
     log("INFO", f"Report JSON: {ctx.reports / 'report.json'}")
     log("INFO", f"Report HTML: {ctx.reports / 'report.html'}")
     log("INFO", f"Findings retenus: {len(kept)} | whitelistes: {len(ignored)} | erreurs scan: {len(scan_errors)}")
@@ -1179,7 +1372,8 @@ def generate_report_only(ctx: Context, whitelist: Path, repo_filter: str | None 
     (ctx.reports / "findings.kept.json").write_text(json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
     (ctx.reports / "findings.ignored.json").write_text(json.dumps(ignored, ensure_ascii=False, indent=2), encoding="utf-8")
     (ctx.reports / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    (ctx.reports / "report.html").write_text(html_report(report), encoding="utf-8")
+    write_findings_csv(kept, ctx.reports / "report.csv")
+    (ctx.reports / "report.html").write_text(html_report(report, "report.csv"), encoding="utf-8")
     log("INFO", f"Report regenere sans scan: {ctx.reports / 'report.html'}")
     log("INFO", f"Findings retenus: {len(kept)} | whitelistes: {len(ignored)} | erreurs scan: {len(scan_errors)}")
 
@@ -1204,7 +1398,114 @@ def list_remote_branches(repo_dir: Path) -> list[str]:
     return sorted(set(branches))
 
 
-def analyze_deep(ctx: Context, whitelist: Path, skip_build: bool = False, repo_filter: str | None = None) -> None:
+def _scan_repo_deep(
+    ctx: Context, repo_dir: Path
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Scan one repo (git history + all branches). Returns (findings, projects, errors).
+
+    Designed to run concurrently with other repos — all output is written to
+    per-repo directories so there are no file-level conflicts between workers.
+    """
+    name = repo_name(ctx, repo_dir)
+    findings: list[dict[str, Any]] = []
+    projects: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    branches = list_remote_branches(repo_dir)
+    if not branches:
+        log("WARN", f"Aucune branche distante trouvee pour {name}, ignore")
+        return findings, projects, errors
+    log("INFO", f"{name}: {len(branches)} branche(s): {', '.join(branches)}")
+
+    # Scan git history once per repo (Gitleaks git + TruffleHog git + ggshield git)
+    git_dir = raw_dir(ctx, name)
+    for scanner, func in [
+        ("Gitleaks-git", lambda d=git_dir: run_gitleaks_git(ctx, repo_dir, d / "gitleaks-git.json")),
+        ("TruffleHog-git", lambda d=git_dir: run_trufflehog_git(ctx, repo_dir, d / "trufflehog-git.jsonl")),
+        ("ggshield-git", lambda d=git_dir: run_ggshield_git(ctx, repo_dir, d / "ggshield-git.json")),
+    ]:
+        try:
+            log("INFO", f"Scan {scanner}: {name}")
+            func()
+        except Exception as exc:
+            errors.append({"repo": name, "scanner": scanner, "error": str(exc)})
+            log("ERROR", f"{name} / {scanner}: {exc}")
+
+    git_findings = normalize_git_findings(name, git_dir)
+    (git_dir / "findings-git.jsonl").write_text(
+        "".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in git_findings),
+        encoding="utf-8",
+    )
+    findings.extend(git_findings)
+
+    # Per-branch: detect-secrets, semgrep, heuristic on tip of each branch
+    worktree_base = ctx.workspace / "worktrees" / safe_raw_name(name)
+    worktree_base.mkdir(parents=True, exist_ok=True)
+    try:
+        for branch in branches:
+            branch_label = f"{name}@{branch}"
+            safe_b = safe_branch_name(branch)
+            worktree_path = worktree_base / safe_b
+            branch_dir = raw_dir(ctx, f"{name}@{branch}")
+
+            if worktree_path.exists():
+                run_process(["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(worktree_path)], check=False)
+                force_rmtree(worktree_path)
+
+            wt_cmd = ["git", "-C", str(repo_dir), "worktree", "add", "--detach", str(worktree_path), f"origin/{branch}"]
+            wt_result = run_process(wt_cmd, check=False)
+            if wt_result.returncode != 0:
+                err_msg = f"Commande en echec ({wt_result.returncode}): {' '.join(wt_cmd)}"
+                errors.append({"repo": branch_label, "scanner": "worktree", "error": err_msg})
+                log("ERROR", err_msg)
+                run_process(["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(worktree_path)], check=False)
+                force_rmtree(worktree_path)
+                continue
+
+            # Remove the .git file (worktree link) so Docker scanners don't see a broken git path
+            worktree_git = worktree_path / ".git"
+            if worktree_git.exists():
+                worktree_git.unlink(missing_ok=True)
+
+            files = create_manifest(worktree_path, branch_label, branch_dir / "files-manifest.json")
+            projects.append({"path_with_namespace": branch_label, "file_count": len(files)})
+
+            for scanner, func in [
+                ("detect-secrets", lambda wt=worktree_path, bd=branch_dir: run_detect_secrets(ctx, wt, bd / "detect-secrets.json")),
+                ("Semgrep", lambda wt=worktree_path, bd=branch_dir: run_semgrep(ctx, wt, bd / "semgrep.json", git_aware=False)),
+                ("heuristique", lambda wt=worktree_path, bl=branch_label, f=files, bd=branch_dir: run_heuristic(wt, bl, f, bd / "heuristic.jsonl")),
+                ("ggshield", lambda wt=worktree_path, bd=branch_dir: run_ggshield(ctx, wt, bd / "ggshield.json")),
+            ]:
+                try:
+                    log("INFO", f"Scan {scanner}: {branch_label}")
+                    func()
+                except Exception as exc:
+                    errors.append({"repo": branch_label, "scanner": scanner, "error": str(exc)})
+                    log("ERROR", f"{branch_label} / {scanner}: {exc}")
+
+            branch_findings = normalize_findings(branch_label, branch_dir, worktree_path)
+            (branch_dir / "findings.jsonl").write_text(
+                "".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in branch_findings),
+                encoding="utf-8",
+            )
+            findings.extend(branch_findings)
+
+            # Clean up worktree: rmtree first, then prune (git worktree remove fails without .git file)
+            force_rmtree(worktree_path)
+    finally:
+        run_process(["git", "-C", str(repo_dir), "worktree", "prune"], check=False)
+        force_rmtree(worktree_base)
+
+    return findings, projects, errors
+
+
+def analyze_deep(
+    ctx: Context,
+    whitelist: Path,
+    skip_build: bool = False,
+    repo_filter: str | None = None,
+    workers: int = 4,
+) -> None:
     require_tools("docker", "git")
     if not whitelist.exists():
         die(f"Whitelist introuvable: {whitelist}")
@@ -1219,87 +1520,24 @@ def analyze_deep(ctx: Context, whitelist: Path, skip_build: bool = False, repo_f
     projects: list[dict[str, Any]] = []
     scan_errors: list[dict[str, Any]] = []
 
-    for repo_dir in repos:
-        name = repo_name(ctx, repo_dir)
-        branches = list_remote_branches(repo_dir)
-        if not branches:
-            log("WARN", f"Aucune branche distante trouvee pour {name}, ignore")
-            continue
-        log("INFO", f"{name}: {len(branches)} branche(s): {', '.join(branches)}")
+    # When a single repo is targeted, no parallelism is needed.
+    effective_workers = 1 if repo_filter else min(workers, len(repos))
+    log("INFO", f"Scan de {len(repos)} repo(s) avec {effective_workers} worker(s) en parallele")
 
-        # Scan git history once per repo (Gitleaks git + TruffleHog git)
-        git_dir = raw_dir(ctx, name)
-        for scanner, func in [
-            ("Gitleaks-git", lambda d=git_dir: run_gitleaks_git(ctx, repo_dir, d / "gitleaks-git.json")),
-            ("TruffleHog-git", lambda d=git_dir: run_trufflehog_git(ctx, repo_dir, d / "trufflehog-git.jsonl")),
-        ]:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
+        futures = {executor.submit(_scan_repo_deep, ctx, repo_dir): repo_dir for repo_dir in repos}
+        for future in concurrent.futures.as_completed(futures):
+            repo_dir = futures[future]
             try:
-                log("INFO", f"Scan {scanner}: {name}")
-                func()
+                repo_findings, repo_projects, repo_errors = future.result()
             except Exception as exc:
-                scan_errors.append({"repo": name, "scanner": scanner, "error": str(exc)})
-                log("ERROR", f"{name} / {scanner}: {exc}")
-
-        git_findings = normalize_git_findings(name, git_dir)
-        (git_dir / "findings-git.jsonl").write_text(
-            "".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in git_findings),
-            encoding="utf-8",
-        )
-        all_findings.extend(git_findings)
-
-        # Per-branch: detect-secrets, semgrep, heuristic on tip of each branch
-        worktree_base = ctx.workspace / "worktrees" / safe_raw_name(name)
-        worktree_base.mkdir(parents=True, exist_ok=True)
-        try:
-            for branch in branches:
-                branch_label = f"{name}@{branch}"
-                safe_b = safe_branch_name(branch)
-                worktree_path = worktree_base / safe_b
-                branch_dir = raw_dir(ctx, f"{name}@{branch}")
-
-                if worktree_path.exists():
-                    run_process(["git", "-C", str(repo_dir), "worktree", "remove", "--force", str(worktree_path)], check=False)
-                    force_rmtree(worktree_path)
-
-                try:
-                    run_process(["git", "-C", str(repo_dir), "worktree", "add", "--detach", str(worktree_path), f"origin/{branch}"])
-                except Exception as exc:
-                    scan_errors.append({"repo": branch_label, "scanner": "worktree", "error": str(exc)})
-                    log("ERROR", f"Worktree {branch_label}: {exc}")
-                    continue
-
-                # Remove the .git file (worktree link) so Docker scanners don't see a broken git path
-                worktree_git = worktree_path / ".git"
-                if worktree_git.exists():
-                    worktree_git.unlink(missing_ok=True)
-
-                files = create_manifest(worktree_path, branch_label, branch_dir / "files-manifest.json")
-                projects.append({"path_with_namespace": branch_label, "file_count": len(files)})
-
-                for scanner, func in [
-                    ("detect-secrets", lambda wt=worktree_path, bd=branch_dir: run_detect_secrets(ctx, wt, bd / "detect-secrets.json")),
-                    ("Semgrep", lambda wt=worktree_path, bd=branch_dir: run_semgrep(ctx, wt, bd / "semgrep.json", git_aware=False)),
-                    ("heuristique", lambda wt=worktree_path, bl=branch_label, f=files, bd=branch_dir: run_heuristic(wt, bl, f, bd / "heuristic.jsonl")),
-                ]:
-                    try:
-                        log("INFO", f"Scan {scanner}: {branch_label}")
-                        func()
-                    except Exception as exc:
-                        scan_errors.append({"repo": branch_label, "scanner": scanner, "error": str(exc)})
-                        log("ERROR", f"{branch_label} / {scanner}: {exc}")
-
-                branch_findings = normalize_findings(branch_label, branch_dir, worktree_path)
-                (branch_dir / "findings.jsonl").write_text(
-                    "".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in branch_findings),
-                    encoding="utf-8",
-                )
-                all_findings.extend(branch_findings)
-
-                # Clean up worktree: rmtree first, then prune (git worktree remove fails without .git file)
-                force_rmtree(worktree_path)
-        finally:
-            run_process(["git", "-C", str(repo_dir), "worktree", "prune"], check=False)
-            force_rmtree(worktree_base)
+                name = repo_name(ctx, repo_dir)
+                log("ERROR", f"Repo {name} a echoue avec une exception inattendue: {exc}")
+                scan_errors.append({"repo": name, "scanner": "analyze_deep", "error": str(exc)})
+            else:
+                all_findings.extend(repo_findings)
+                projects.extend(repo_projects)
+                scan_errors.extend(repo_errors)
 
     kept, ignored = whitelist_findings(all_findings, whitelist)
     report = {
@@ -1321,7 +1559,8 @@ def analyze_deep(ctx: Context, whitelist: Path, skip_build: bool = False, repo_f
     (ctx.reports / "findings.kept.json").write_text(json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8")
     (ctx.reports / "findings.ignored.json").write_text(json.dumps(ignored, ensure_ascii=False, indent=2), encoding="utf-8")
     (ctx.reports / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    (ctx.reports / "report.html").write_text(html_report(report), encoding="utf-8")
+    write_findings_csv(kept, ctx.reports / "report.csv")
+    (ctx.reports / "report.html").write_text(html_report(report, "report.csv"), encoding="utf-8")
     log("INFO", f"Report JSON: {ctx.reports / 'report.json'}")
     log("INFO", f"Report HTML: {ctx.reports / 'report.html'}")
     log("INFO", f"Findings retenus: {len(kept)} | whitelistes: {len(ignored)} | erreurs scan: {len(scan_errors)}")
@@ -1329,11 +1568,22 @@ def analyze_deep(ctx: Context, whitelist: Path, skip_build: bool = False, repo_f
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="SAMU - Secrets Analysis & Monitoring Utility")
-    parser.add_argument("command", choices=["sync", "analyze", "report", "scan", "scan-open", "sync-deep", "analyze-deep", "scan-deep", "scan-deep-open"])
+    parser.add_argument("command", choices=[
+        "sync", "analyze", "report",
+        "scan", "scan-open",
+        "sync-deep", "analyze-deep", "scan-deep", "scan-deep-open",
+    ])
     parser.add_argument("--secrets-file", default=".secrets")
     parser.add_argument("--whitelist-file", default="config/whitelist.json")
     parser.add_argument("--skip-detect-secrets-build", action="store_true")
     parser.add_argument("--repo", help="Repo local a analyser: namespace GitLab ou chemin local quelconque")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        metavar="N",
+        help="Nombre de repos scannés en parallèle pour analyze-deep (defaut: 4)",
+    )
     parser.add_argument("--no-banner", action="store_true")
     args = parser.parse_args()
 
@@ -1365,13 +1615,13 @@ def main() -> None:
     elif args.command == "sync-deep":
         sync_deep(ctx)
     elif args.command == "analyze-deep":
-        analyze_deep(ctx, whitelist, args.skip_detect_secrets_build, args.repo)
+        analyze_deep(ctx, whitelist, args.skip_detect_secrets_build, args.repo, args.workers)
     elif args.command == "scan-deep":
         sync_deep(ctx)
-        analyze_deep(ctx, whitelist, args.skip_detect_secrets_build, args.repo)
+        analyze_deep(ctx, whitelist, args.skip_detect_secrets_build, args.repo, args.workers)
     elif args.command == "scan-deep-open":
         sync_deep(ctx)
-        analyze_deep(ctx, whitelist, args.skip_detect_secrets_build, args.repo)
+        analyze_deep(ctx, whitelist, args.skip_detect_secrets_build, args.repo, args.workers)
         webbrowser.open((ctx.reports / "report.html").resolve().as_uri())
 
 

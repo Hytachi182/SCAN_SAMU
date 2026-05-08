@@ -15,11 +15,17 @@
 
 ## Scanners
 
-- `gitleaks` / `gitleaks-git` (historique complet)
-- `trufflehog` / `trufflehog-git` (historique complet)
-- `detect-secrets`
-- `semgrep`
-- `heuristic`, pour les assignations suspectes et placeholders comme `proxy_password: password`
+| Scanner | Scope | Mode |
+|---|---|---|
+| `gitleaks` | Working tree | normal |
+| `gitleaks-git` | Historique complet | profond |
+| `trufflehog` | Working tree | normal |
+| `trufflehog-git` | Historique complet | profond |
+| `detect-secrets` | Working tree | normal, profond (tip par branche) |
+| `semgrep` | Working tree | normal, profond (tip par branche) |
+| `ggshield` | Working tree | normal, profond (tip par branche) |
+| `ggshield-git` | Historique complet | profond |
+| `heuristic` | Working tree | normal, profond (tip par branche) |
 
 ## Prerequis
 
@@ -42,6 +48,9 @@ GITLEAKS_IMAGES=ghcr.io/gitleaks/gitleaks:latest,zricethezav/gitleaks:latest
 TRUFFLEHOG_IMAGES=trufflesecurity/trufflehog:latest
 SEMGREP_IMAGES=semgrep/semgrep:latest
 SEMGREP_CONFIGS=/rules/semgrep-secrets.yml,p/secrets
+GGSHIELD_IMAGE=gitguardian/ggshield:latest
+# Optionnel — ggshield est silencieusement ignore si absent
+GITGUARDIAN_API_KEY=ggshield_xxxxxxxxxxxxxxxxxxxx
 ```
 
 Si `ghcr.io` est refuse par Docker, force Docker Hub :
@@ -52,7 +61,9 @@ GITLEAKS_IMAGES=zricethezav/gitleaks:latest
 
 ## Commandes
 
-Synchroniser les repos :
+### Mode normal (working tree, branche par defaut)
+
+Synchroniser les repos (`--depth 1`, branche par defaut) :
 
 ```bash
 python scripts/samu.py sync
@@ -112,11 +123,33 @@ Synchroniser avec historique entier et toutes les branches :
 python scripts/samu.py sync-deep
 ```
 
-Analyser tous les commits et toutes les branches (repos déjà synchronisés en deep) :
+Analyser tous les commits et toutes les branches (repos deja synchronises en deep) :
 
 ```bash
 python scripts/samu.py analyze-deep
 ```
+
+Par defaut 4 repos sont analyses en parallele. Utilise `--workers` pour ajuster :
+
+```bash
+# 8 repos en parallele
+python scripts/samu.py analyze-deep --workers 8
+
+# sequentiel (debug)
+python scripts/samu.py analyze-deep --workers 1
+```
+
+Le parallelisme est au niveau du repo : chaque worker traite un repo complet de facon independante
+(scan git history + toutes les branches via worktree). Les scanners Docker d'un meme worker
+restent sequentiels pour ne pas se marcher dessus.
+
+Dimensionnement indicatif (`--workers N`) :
+
+| RAM Docker | Recommande |
+|---|---|
+| < 8 GB | 2–4 |
+| 8–16 GB | 4–8 |
+| > 16 GB | 8–16 |
 
 Pipeline complet profond :
 
@@ -132,9 +165,10 @@ python scripts/samu.py scan-deep-open
 
 En mode profond :
 - `sync-deep` clone sans `--depth 1` (historique complet, toutes les branches)
-- `gitleaks git` et `trufflehog git` scannent tous les commits de toutes les branches
-- `detect-secrets`, `semgrep` et `heuristic` tournent sur le tip de chaque branche via `git worktree`
+- `gitleaks-git`, `trufflehog-git` et `ggshield-git` scannent tous les commits de toutes les branches
+- `detect-secrets`, `semgrep`, `ggshield` et `heuristic` tournent sur le tip de chaque branche via `git worktree`
 - Les findings git-history indiquent le hash court du commit et la branche dans la colonne *Line Content*
+- Les branches dont le checkout echoue (ex : chemin invalide sous Windows) sont ignorees avec une erreur dans le rapport, sans interrompre le scan
 
 ## Structure
 
@@ -154,13 +188,14 @@ Les fichiers generes sont recrees sous `data/` :
 - `data/raw/<repo>/trufflehog-git.jsonl` (mode profond)
 - `data/raw/<repo>/detect-secrets.json`
 - `data/raw/<repo>/semgrep.json`
+- `data/raw/<repo>/ggshield.json`
+- `data/raw/<repo>/ggshield-git.json` (mode profond)
 - `data/raw/<repo>/heuristic.jsonl`
-- `data/raw/<repo>@<branch>/` (mode profond, une entrée par branche)
+- `data/raw/<repo>@<branch>/` (mode profond, une entree par branche)
 - `data/raw/<repo>/findings-git.jsonl` (mode profond)
 - `data/raw/<repo>/files-manifest.json`
 - `data/raw/scan-errors.json`
-- `data/reports/report.json`
-- `data/reports/report.html`
+- `data/reports/report.json` / `data/reports/report.html`
 
 `files-manifest.json` liste tous les fichiers du working tree pris en compte pour chaque repo, hors metadata `.git`.
 
@@ -184,4 +219,5 @@ La synchronisation force :
 - hooks Git neutralises
 - `protocol.file.allow=never`
 - scans Docker en lecture seule sur les repos clones
+- cle GitGuardian transmise via variable d'environnement Docker (jamais en argument CLI)
 
